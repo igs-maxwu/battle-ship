@@ -120,9 +120,6 @@ class Player {
       this.y += dy * this.speed * dt;
     }
 
-    this.x = Math.max(PLAYER_SIZE / 2, Math.min(CANVAS_W - PLAYER_SIZE / 2, this.x));
-    this.y = Math.max(PLAYER_SIZE / 2, Math.min(CANVAS_H - PLAYER_SIZE / 2, this.y));
-
     this.fireCooldown -= dt * 1000;
     if (this.flashTimer > 0) this.flashTimer -= dt * 1000;
 
@@ -155,8 +152,10 @@ class Player {
     if (img) {
       ctx.drawImage(img, -PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
       if (this.flashTimer > 0) {
-        ctx.fillStyle = 'rgba(255,0,0,0.5)';
+        ctx.globalCompositeOperation = 'source-atop';
+        ctx.fillStyle = 'rgba(255, 60, 60, 0.55)';
         ctx.fillRect(-PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
+        ctx.globalCompositeOperation = 'source-over';
       }
     } else {
       ctx.fillStyle = this.flashTimer > 0 ? '#ff4444' : '#44aaff';
@@ -218,8 +217,10 @@ class Enemy {
     if (img) {
       ctx.drawImage(img, -PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
       if (this.flashTimer > 0) {
-        ctx.fillStyle = 'rgba(255,0,0,0.5)';
+        ctx.globalCompositeOperation = 'source-atop';
+        ctx.fillStyle = 'rgba(255, 60, 60, 0.55)';
         ctx.fillRect(-PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
+        ctx.globalCompositeOperation = 'source-over';
       }
     } else {
       ctx.fillStyle = this.flashTimer > 0 ? '#ff4444' : '#cc3333';
@@ -263,7 +264,9 @@ class Cannonball {
   update(dt) {
     this.x += this.vx * dt;
     this.y += this.vy * dt;
-    if (this.x < -20 || this.x > CANVAS_W + 20 || this.y < -20 || this.y > CANVAS_H + 20) {
+    const dx = this.x - player.x;
+    const dy = this.y - player.y;
+    if (Math.abs(dx) > CANVAS_W / 2 + 100 || Math.abs(dy) > CANVAS_H / 2 + 100) {
       this.dead = true;
     }
   }
@@ -321,11 +324,15 @@ class Explosion {
 function spawnEnemy() {
   const edge = Math.floor(Math.random() * 4);
   let x, y;
+  const vL = player.x - CANVAS_W / 2 - SPAWN_OFFSET;
+  const vR = player.x + CANVAS_W / 2 + SPAWN_OFFSET;
+  const vT = player.y - CANVAS_H / 2 - SPAWN_OFFSET;
+  const vB = player.y + CANVAS_H / 2 + SPAWN_OFFSET;
   switch (edge) {
-    case 0: x = Math.random() * CANVAS_W; y = -SPAWN_OFFSET; break;
-    case 1: x = Math.random() * CANVAS_W; y = CANVAS_H + SPAWN_OFFSET; break;
-    case 2: x = -SPAWN_OFFSET; y = Math.random() * CANVAS_H; break;
-    case 3: x = CANVAS_W + SPAWN_OFFSET; y = Math.random() * CANVAS_H; break;
+    case 0: x = vL + Math.random() * (vR - vL); y = vT; break;
+    case 1: x = vL + Math.random() * (vR - vL); y = vB; break;
+    case 2: x = vL; y = vT + Math.random() * (vB - vT); break;
+    case 3: x = vR; y = vT + Math.random() * (vB - vT); break;
   }
   enemies.push(new Enemy(x, y, player.maxHP));
 }
@@ -356,7 +363,7 @@ function checkCollisions() {
           if (e.isDead()) {
             explosions.push(new Explosion(e.x, e.y));
             player.maxHP += e.initialHP;
-            player.hp += e.initialHP;
+            player.hp = player.maxHP;
             player.atk = player.maxHP / 10;
             sunkCount++;
           } else {
@@ -583,17 +590,23 @@ function gameLoop(timestamp) {
   } else if (gameState === 'PLAYING') {
     update(dt);
     drawBackground(ctx);
+    ctx.save();
+    ctx.translate(Math.round(CANVAS_W / 2 - player.x), Math.round(CANVAS_H / 2 - player.y));
     for (const b of cannonballs) b.draw(ctx);
     for (const e of enemies) e.draw(ctx);
     player.draw(ctx);
     for (const ex of explosions) ex.draw(ctx);
+    ctx.restore();
     drawHUD(ctx);
   } else if (gameState === 'GAME_OVER') {
     drawBackground(ctx);
+    ctx.save();
+    ctx.translate(Math.round(CANVAS_W / 2 - player.x), Math.round(CANVAS_H / 2 - player.y));
     for (const b of cannonballs) b.draw(ctx);
     for (const e of enemies) e.draw(ctx);
     player.draw(ctx);
     for (const ex of explosions) ex.draw(ctx);
+    ctx.restore();
     drawHUD(ctx);
     drawGameOverScreen(ctx);
   }
