@@ -123,3 +123,21 @@ this.x += 3;   // breaks at non-60fps
 8. No external URLs or resources
 9. Code structure matches the section layout in SPEC.md
 10. No commented-out dead code in final submission
+
+---
+
+## Report Format (required after every push)
+
+After every `git push`, reply in exactly this format:
+
+```
+Commit pushed: <hash> on main at https://github.com/igs-maxwu/battle-ship
+
+Changes:
+- <one line per file changed, describing what was done>
+
+Self-check:
+- [ ] or [x] for each of the 10 reviewer checklist items above
+```
+
+Do not add extra explanation. The reviewer will ask follow-up questions if needed.
