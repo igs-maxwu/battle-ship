@@ -34,6 +34,7 @@ const SPAWN_INTERVALS = [4000, 3000, 2500, 2000];
 const SPAWN_STEP_TIME = 30000;
 const HIT_FLASH_MS = 300;
 const BLINK_INTERVAL = 600;
+const FIRE_ANIM_INTERVAL = 400;
 
 // State
 let gameState = 'LOADING';
@@ -55,7 +56,8 @@ let lastTime = 0;
 const images = {};
 const imageNames = [
   'ship_player', 'ship_enemy1', 'ship_enemy2', 'ship_enemy3',
-  'cannonball', 'explosion1', 'explosion2', 'explosion3'
+  'cannonball', 'explosion1', 'explosion2', 'explosion3',
+  'fire1', 'fire2'
 ];
 
 function loadImage(src) {
@@ -151,13 +153,6 @@ class Player {
     ctx.rotate(this.angle + Math.PI / 2);
     const img = images.ship_player;
     if (img) {
-      if (this.flashTimer > 0) {
-        ctx.globalCompositeOperation = 'source-atop';
-        ctx.drawImage(img, -PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
-        ctx.fillStyle = 'rgba(255,0,0,0.5)';
-        ctx.fillRect(-PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
-        ctx.globalCompositeOperation = 'source-over';
-      }
       ctx.drawImage(img, -PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
       if (this.flashTimer > 0) {
         ctx.fillStyle = 'rgba(255,0,0,0.5)';
@@ -188,6 +183,8 @@ class Enemy {
     this.angle = 0;
     this.fireCooldown = ENEMY_FIRE_COOLDOWN * Math.random();
     this.flashTimer = 0;
+    this.fireAnimTimer = 0;
+    this.damaged = false;
     this.spriteKey = ['ship_enemy1', 'ship_enemy2', 'ship_enemy3'][Math.floor(Math.random() * 3)];
   }
 
@@ -204,6 +201,7 @@ class Enemy {
 
     this.fireCooldown -= dt * 1000;
     if (this.flashTimer > 0) this.flashTimer -= dt * 1000;
+    if (this.damaged) this.fireAnimTimer += dt * 1000;
 
     if (dist <= ENEMY_FIRE_RANGE && this.fireCooldown <= 0) {
       const angle = Math.atan2(player.y - this.y, player.x - this.x);
@@ -228,6 +226,20 @@ class Enemy {
       ctx.fillRect(-PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
     }
     ctx.restore();
+
+    if (this.damaged && !this.isDead()) {
+      const fireFrame = Math.floor(this.fireAnimTimer / FIRE_ANIM_INTERVAL) % 2;
+      const fireKey = fireFrame === 0 ? 'fire1' : 'fire2';
+      const fireImg = images[fireKey];
+      if (fireImg) {
+        ctx.drawImage(fireImg, this.x - 20, this.y - 28, 40, 40);
+      } else {
+        ctx.beginPath();
+        ctx.arc(this.x, this.y - 12, 10, 0, Math.PI * 2);
+        ctx.fillStyle = fireFrame === 0 ? '#ff6600' : '#ffaa00';
+        ctx.fill();
+      }
+    }
 
     drawHPBar(ctx, this.x, this.y - PLAYER_SIZE / 2 - 10, 40, 5, this.hp, this.initialHP);
     drawHPText(ctx, this.x, this.y, this.hp);
@@ -347,6 +359,8 @@ function checkCollisions() {
             player.hp += e.initialHP;
             player.atk = player.maxHP / 10;
             sunkCount++;
+          } else {
+            e.damaged = true;
           }
           break;
         }
