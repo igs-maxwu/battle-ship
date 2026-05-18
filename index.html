@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Battle Ship — Pirate Sea Battle</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #000; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+  canvas { max-width: 100%; display: block; }
+</style>
+</head>
+<body>
+<canvas id="game" width="800" height="600"></canvas>
+<script>
+// Config
+const CANVAS_W = 800;
+const CANVAS_H = 600;
+const PLAYER_SPEED = 180;
+const PLAYER_SIZE = 64;
+const PLAYER_COLLISION_R = 28;
+const PLAYER_INITIAL_HP = 10;
+const PLAYER_FIRE_RANGE = 200;
+const PLAYER_FIRE_COOLDOWN = 1000;
+const ENEMY_FIRE_RANGE = 200;
+const ENEMY_FIRE_COOLDOWN = 2000;
+const CANNONBALL_SPEED = 350;
+const CANNONBALL_SIZE = 16;
+const CANNONBALL_COLLISION_R = 6;
+const EXPLOSION_FRAME_MS = 120;
+const EXPLOSION_SIZE = 80;
+const SPAWN_OFFSET = 60;
+const SPAWN_INTERVALS = [4000, 3000, 2500, 2000];
+const SPAWN_STEP_TIME = 30000;
+const HIT_FLASH_MS = 300;
+const BLINK_INTERVAL = 600;
+
+// State
+let gameState = 'LOADING';
+let gameTime = 0;
+let sunkCount = 0;
+let spawnTimer = 0;
+let spawnIntervalIndex = 0;
+let spawnStepTimer = 0;
+let blinkTimer = 0;
+let blinkVisible = true;
+let player = null;
+let enemies = [];
+let cannonballs = [];
+let explosions = [];
+let keys = {};
+let lastTime = 0;
+
+// Assets
+const images = {};
+const imageNames = [
+  'ship_player', 'ship_enemy1', 'ship_enemy2', 'ship_enemy3',
+  'cannonball', 'explosion1', 'explosion2', 'explosion3'
+];
+
+function loadImage(src) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+}
+
+async function loadAllImages() {
+  const promises = imageNames.map(name => loadImage(`assets/${name}.png`));
+  const results = await Promise.all(promises);
+  for (let i = 0; i < imageNames.length; i++) {
+    images[imageNames[i]] = results[i];
+  }
+}
+
+// Input
+function setupInput() {
+  window.addEventListener('keydown', (e) => { keys[e.key] = true; });
+  window.addEventListener('keyup', (e) => { keys[e.key] = false; });
+  window.addEventListener('keydown', (e) => {
+    if (gameState === 'TITLE' && (e.key === ' ' || e.code === 'Space')) startGame();
+  });
+  window.addEventListener('click', () => {
+    if (gameState === 'TITLE') startGame();
+  });
+}
+
+// Entities — Player
+class Player {
+  constructor() {
+    this.x = CANVAS_W / 2;
+    this.y = CANVAS_H / 2;
+    this.initialHP = PLAYER_INITIAL_HP;
+    this.maxHP = PLAYER_INITIAL_HP;
+    this.hp = PLAYER_INITIAL_HP;
+    this.atk = this.maxHP / 10;
+    this.speed = PLAYER_SPEED;
+    this.angle = -Math.PI / 2;
+    this.fireCooldown = 0;
+    this.flashTimer = 0;
+  }
+
+  update(dt) {
+    let dx = 0, dy = 0;
+    if (keys['w'] || keys['W'] || keys['ArrowUp']) dy = -1;
+    if (keys['s'] || keys['S'] || keys['ArrowDown']) dy = 1;
+    if (keys['a'] || keys['A'] || keys['ArrowLeft']) dx = -1;
+    if (keys['d'] || keys['D'] || keys['ArrowRight']) dx = 1;
+
+    if (dx !== 0 || dy !== 0) {
+      const len = Math.sqrt(dx * dx + dy * dy);
+      dx /= len;
+      dy /= len;
+      this.angle = Math.atan2(dy, dx);
+      this.x += dx * this.speed * dt;
+      this.y += dy * this.speed * dt;
+    }
+
+    this.x = Math.max(PLAYER_SIZE / 2, Math.min(CANVAS_W - PLAYER_SIZE / 2, this.x));
+    this.y = Math.max(PLAYER_SIZE / 2, Math.min(CANVAS_H - PLAYER_SIZE / 2, this.y));
+
+    this.fireCooldown -= dt * 1000;
+    if (this.flashTimer > 0) this.flashTimer -= dt * 1000;
+
+    this.autoFire();
+  }
+
+  autoFire() {
+    if (this.fireCooldown > 0) return;
+    let nearest = null;
+    let nearestDist = Infinity;
+    for (const e of enemies) {
+      const dist = distance(this.x, this.y, e.x, e.y);
+      if (dist <= PLAYER_FIRE_RANGE && dist < nearestDist) {
+        nearest = e;
+        nearestDist = dist;
+      }
+    }
+    if (nearest) {
+      const angle = Math.atan2(nearest.y - this.y, nearest.x - this.x);
+      cannonballs.push(new Cannonball(this.x, this.y, angle, this.atk, 'player'));
+      this.fireCooldown = PLAYER_FIRE_COOLDOWN;
+    }
+  }
+
+  draw(ctx) {
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.angle + Math.PI / 2);
+    const img = images.ship_player;
+    if (img) {
+      if (this.flashTimer > 0) {
+        ctx.globalCompositeOperation = 'source-atop';
+        ctx.drawImage(img, -PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
+        ctx.fillStyle = 'rgba(255,0,0,0.5)';
+        ctx.fillRect(-PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
+        ctx.globalCompositeOperation = 'source-over';
+      }
+      ctx.drawImage(img, -PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
+      if (this.flashTimer > 0) {
+        ctx.fillStyle = 'rgba(255,0,0,0.5)';
+        ctx.fillRect(-PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
+      }
+    } else {
+      ctx.fillStyle = this.flashTimer > 0 ? '#ff4444' : '#44aaff';
+      ctx.fillRect(-PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
+    }
+    ctx.restore();
+
+    drawHPText(ctx, this.x, this.y, this.hp);
+    drawHPBar(ctx, this.x, this.y + PLAYER_SIZE / 2 + 8, 50, 6, this.hp, this.maxHP);
+  }
+
+  isDead() { return this.hp <= 0; }
+}
+
+// Entities — Enemy
+class Enemy {
+  constructor(x, y, playerMaxHP) {
+    this.x = x;
+    this.y = y;
+    this.initialHP = Math.round(playerMaxHP * (0.7 + Math.random() * 0.6));
+    this.hp = this.initialHP;
+    this.atk = this.initialHP / 10;
+    this.speed = PLAYER_SPEED * (0.7 + Math.random() * 0.2);
+    this.angle = 0;
+    this.fireCooldown = ENEMY_FIRE_COOLDOWN * Math.random();
+    this.flashTimer = 0;
+    this.spriteKey = ['ship_enemy1', 'ship_enemy2', 'ship_enemy3'][Math.floor(Math.random() * 3)];
+  }
+
+  update(dt) {
+    const dx = player.x - this.x;
+    const dy = player.y - this.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    this.angle = Math.atan2(dy, dx);
+
+    if (dist > 5) {
+      this.x += (dx / dist) * this.speed * dt;
+      this.y += (dy / dist) * this.speed * dt;
+    }
+
+    this.fireCooldown -= dt * 1000;
+    if (this.flashTimer > 0) this.flashTimer -= dt * 1000;
+
+    if (dist <= ENEMY_FIRE_RANGE && this.fireCooldown <= 0) {
+      const angle = Math.atan2(player.y - this.y, player.x - this.x);
+      cannonballs.push(new Cannonball(this.x, this.y, angle, this.atk, 'enemy'));
+      this.fireCooldown = ENEMY_FIRE_COOLDOWN;
+    }
+  }
+
+  draw(ctx) {
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.angle + Math.PI / 2);
+    const img = images[this.spriteKey];
+    if (img) {
+      ctx.drawImage(img, -PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
+      if (this.flashTimer > 0) {
+        ctx.fillStyle = 'rgba(255,0,0,0.5)';
+        ctx.fillRect(-PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
+      }
+    } else {
+      ctx.fillStyle = this.flashTimer > 0 ? '#ff4444' : '#cc3333';
+      ctx.fillRect(-PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
+    }
+    ctx.restore();
+
+    drawHPBar(ctx, this.x, this.y - PLAYER_SIZE / 2 - 10, 40, 5, this.hp, this.initialHP);
+    drawHPText(ctx, this.x, this.y, this.hp);
+  }
+
+  isDead() { return this.hp <= 0; }
+}
+
+// Entities — Cannonball
+class Cannonball {
+  constructor(x, y, angle, atk, owner) {
+    this.x = x;
+    this.y = y;
+    this.vx = Math.cos(angle) * CANNONBALL_SPEED;
+    this.vy = Math.sin(angle) * CANNONBALL_SPEED;
+    this.atk = atk;
+    this.owner = owner;
+    this.dead = false;
+  }
+
+  update(dt) {
+    this.x += this.vx * dt;
+    this.y += this.vy * dt;
+    if (this.x < -20 || this.x > CANVAS_W + 20 || this.y < -20 || this.y > CANVAS_H + 20) {
+      this.dead = true;
+    }
+  }
+
+  draw(ctx) {
+    const img = images.cannonball;
+    if (img) {
+      ctx.drawImage(img, this.x - CANNONBALL_SIZE / 2, this.y - CANNONBALL_SIZE / 2, CANNONBALL_SIZE, CANNONBALL_SIZE);
+    } else {
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, 6, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffdd00';
+      ctx.fill();
+    }
+  }
+
+  isDead() { return this.dead; }
+}
+
+// Entities — Explosion
+class Explosion {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.frame = 0;
+    this.timer = 0;
+  }
+
+  update(dt) {
+    this.timer += dt * 1000;
+    if (this.timer >= EXPLOSION_FRAME_MS) {
+      this.timer -= EXPLOSION_FRAME_MS;
+      this.frame++;
+    }
+  }
+
+  draw(ctx) {
+    const frameNames = ['explosion1', 'explosion2', 'explosion3'];
+    if (this.frame >= 3) return;
+    const img = images[frameNames[this.frame]];
+    if (img) {
+      ctx.drawImage(img, this.x - EXPLOSION_SIZE / 2, this.y - EXPLOSION_SIZE / 2, EXPLOSION_SIZE, EXPLOSION_SIZE);
+    } else {
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, EXPLOSION_SIZE / 2 - this.frame * 10, 0, Math.PI * 2);
+      ctx.fillStyle = ['#ff6600', '#ff9900', '#ffcc00'][this.frame];
+      ctx.fill();
+    }
+  }
+
+  isDead() { return this.frame >= 3; }
+}
+
+// Spawning
+function spawnEnemy() {
+  const edge = Math.floor(Math.random() * 4);
+  let x, y;
+  switch (edge) {
+    case 0: x = Math.random() * CANVAS_W; y = -SPAWN_OFFSET; break;
+    case 1: x = Math.random() * CANVAS_W; y = CANVAS_H + SPAWN_OFFSET; break;
+    case 2: x = -SPAWN_OFFSET; y = Math.random() * CANVAS_H; break;
+    case 3: x = CANVAS_W + SPAWN_OFFSET; y = Math.random() * CANVAS_H; break;
+  }
+  enemies.push(new Enemy(x, y, player.maxHP));
+}
+
+// Collision
+function circlesOverlap(ax, ay, ar, bx, by, br) {
+  const dx = ax - bx, dy = ay - by;
+  return dx * dx + dy * dy < (ar + br) * (ar + br);
+}
+
+function distance(ax, ay, bx, by) {
+  const dx = ax - bx, dy = ay - by;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function checkCollisions() {
+  for (let i = cannonballs.length - 1; i >= 0; i--) {
+    const b = cannonballs[i];
+    if (b.dead) continue;
+
+    if (b.owner === 'player') {
+      for (const e of enemies) {
+        if (e.isDead()) continue;
+        if (circlesOverlap(b.x, b.y, CANNONBALL_COLLISION_R, e.x, e.y, PLAYER_COLLISION_R)) {
+          e.hp -= b.atk;
+          e.flashTimer = HIT_FLASH_MS;
+          b.dead = true;
+          if (e.isDead()) {
+            explosions.push(new Explosion(e.x, e.y));
+            player.maxHP += e.initialHP;
+            player.hp += e.initialHP;
+            player.atk = player.maxHP / 10;
+            sunkCount++;
+          }
+          break;
+        }
+      }
+    } else if (b.owner === 'enemy') {
+      if (circlesOverlap(b.x, b.y, CANNONBALL_COLLISION_R, player.x, player.y, PLAYER_COLLISION_R)) {
+        player.hp -= b.atk;
+        player.flashTimer = HIT_FLASH_MS;
+        b.dead = true;
+        if (player.isDead()) {
+          gameState = 'GAME_OVER';
+        }
+      }
+    }
+  }
+}
+
+// Update
+function update(dt) {
+  if (gameState !== 'PLAYING') return;
+
+  gameTime += dt * 1000;
+
+  spawnStepTimer += dt * 1000;
+  if (spawnStepTimer >= SPAWN_STEP_TIME && spawnIntervalIndex < SPAWN_INTERVALS.length - 1) {
+    spawnStepTimer -= SPAWN_STEP_TIME;
+    spawnIntervalIndex++;
+  }
+
+  spawnTimer -= dt * 1000;
+  if (spawnTimer <= 0) {
+    spawnEnemy();
+    spawnTimer = SPAWN_INTERVALS[spawnIntervalIndex];
+  }
+
+  player.update(dt);
+  for (const e of enemies) e.update(dt);
+  for (const b of cannonballs) b.update(dt);
+  for (const ex of explosions) ex.update(dt);
+
+  checkCollisions();
+
+  enemies = enemies.filter(e => !e.isDead());
+  cannonballs = cannonballs.filter(b => !b.isDead());
+  explosions = explosions.filter(ex => !ex.isDead());
+}
+
+// Draw
+function drawBackground(ctx) {
+  const grad = ctx.createLinearGradient(0, 0, 0, CANVAS_H);
+  grad.addColorStop(0, '#0a2a5e');
+  grad.addColorStop(1, '#1a6b8a');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+}
+
+function drawHPText(ctx, x, y, hp) {
+  ctx.save();
+  ctx.font = 'bold 14px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 1;
+  ctx.fillStyle = '#fff';
+  ctx.strokeText(Math.ceil(hp).toString(), x, y);
+  ctx.fillText(Math.ceil(hp).toString(), x, y);
+  ctx.restore();
+}
+
+function drawHPBar(ctx, x, y, w, h, current, max) {
+  const barX = x - w / 2;
+  ctx.fillStyle = '#aa0000';
+  ctx.fillRect(barX, y, w, h);
+  const ratio = Math.max(0, current / max);
+  ctx.fillStyle = '#00cc00';
+  ctx.fillRect(barX, y, w * ratio, h);
+}
+
+function drawHUD(ctx) {
+  const seconds = Math.floor(gameTime / 1000);
+  const min = String(Math.floor(seconds / 60)).padStart(2, '0');
+  const sec = String(seconds % 60).padStart(2, '0');
+
+  ctx.save();
+  ctx.font = 'bold 18px monospace';
+  ctx.textBaseline = 'top';
+  ctx.shadowColor = '#000';
+  ctx.shadowOffsetX = 1;
+  ctx.shadowOffsetY = 1;
+
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#fff';
+  ctx.fillText(`⏱ ${min}:${sec}`, 10, 10);
+
+  ctx.textAlign = 'right';
+  ctx.fillText(`⚓ ${sunkCount} sunk`, CANVAS_W - 10, 10);
+  ctx.restore();
+}
+
+// Screens
+function drawLoadingScreen(ctx) {
+  drawBackground(ctx);
+  ctx.save();
+  ctx.font = 'bold 24px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#fff';
+  ctx.fillText('Loading…', CANVAS_W / 2, CANVAS_H / 2);
+  ctx.restore();
+}
+
+function drawTitleScreen(ctx, dt) {
+  drawBackground(ctx);
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  ctx.font = 'bold 48px sans-serif';
+  ctx.fillStyle = '#ffd700';
+  ctx.fillText('BATTLE SHIP', CANVAS_W / 2, CANVAS_H / 2 - 80);
+
+  ctx.font = '24px sans-serif';
+  ctx.fillStyle = '#fff';
+  ctx.fillText('Pirate Sea Battle', CANVAS_W / 2, CANVAS_H / 2 - 30);
+
+  ctx.font = '16px sans-serif';
+  ctx.fillStyle = '#ccc';
+  ctx.fillText('WASD to sail · auto-cannon fires', CANVAS_W / 2, CANVAS_H / 2 + 20);
+
+  blinkTimer += dt * 1000;
+  if (blinkTimer >= BLINK_INTERVAL) {
+    blinkTimer -= BLINK_INTERVAL;
+    blinkVisible = !blinkVisible;
+  }
+  if (blinkVisible) {
+    ctx.font = '18px sans-serif';
+    ctx.fillStyle = '#fff';
+    ctx.fillText('Click or press SPACE to start', CANVAS_W / 2, CANVAS_H / 2 + 70);
+  }
+  ctx.restore();
+}
+
+function drawGameOverScreen(ctx) {
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  ctx.font = 'bold 48px sans-serif';
+  ctx.fillStyle = '#ff3333';
+  ctx.fillText('SHIP SUNK', CANVAS_W / 2, CANVAS_H / 2 - 80);
+
+  const seconds = Math.floor(gameTime / 1000);
+  const min = String(Math.floor(seconds / 60)).padStart(2, '0');
+  const sec = String(seconds % 60).padStart(2, '0');
+
+  ctx.font = '24px sans-serif';
+  ctx.fillStyle = '#fff';
+  ctx.fillText(`Survived: ${min}:${sec}`, CANVAS_W / 2, CANVAS_H / 2 - 20);
+  ctx.fillText(`Ships sunk: ${sunkCount}`, CANVAS_W / 2, CANVAS_H / 2 + 20);
+
+  ctx.font = 'bold 20px sans-serif';
+  ctx.fillStyle = '#4af';
+  ctx.fillText('[ Play Again ]', CANVAS_W / 2, CANVAS_H / 2 + 80);
+  ctx.fillStyle = '#8f8';
+  ctx.fillText('[ Play Full Game ]', CANVAS_W / 2, CANVAS_H / 2 + 120);
+  ctx.restore();
+
+  canvas.onclick = handleGameOverClick;
+}
+
+function handleGameOverClick(e) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = CANVAS_W / rect.width;
+  const scaleY = CANVAS_H / rect.height;
+  const mx = (e.clientX - rect.left) * scaleX;
+  const my = (e.clientY - rect.top) * scaleY;
+
+  if (my > CANVAS_H / 2 + 60 && my < CANVAS_H / 2 + 100 && mx > CANVAS_W / 2 - 100 && mx < CANVAS_W / 2 + 100) {
+    canvas.onclick = null;
+    startGame();
+  }
+  if (my > CANVAS_H / 2 + 100 && my < CANVAS_H / 2 + 140 && mx > CANVAS_W / 2 - 100 && mx < CANVAS_W / 2 + 100) {
+    window.location.href = '#';
+  }
+}
+
+function startGame() {
+  gameState = 'PLAYING';
+  gameTime = 0;
+  sunkCount = 0;
+  spawnTimer = SPAWN_INTERVALS[0];
+  spawnIntervalIndex = 0;
+  spawnStepTimer = 0;
+  player = new Player();
+  enemies = [];
+  cannonballs = [];
+  explosions = [];
+  canvas.onclick = null;
+}
+
+// Game loop
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+function gameLoop(timestamp) {
+  if (lastTime === 0) lastTime = timestamp;
+  const dt = Math.min((timestamp - lastTime) / 1000, 0.05);
+  lastTime = timestamp;
+
+  if (gameState === 'LOADING') {
+    drawLoadingScreen(ctx);
+  } else if (gameState === 'TITLE') {
+    drawTitleScreen(ctx, dt);
+  } else if (gameState === 'PLAYING') {
+    update(dt);
+    drawBackground(ctx);
+    for (const b of cannonballs) b.draw(ctx);
+    for (const e of enemies) e.draw(ctx);
+    player.draw(ctx);
+    for (const ex of explosions) ex.draw(ctx);
+    drawHUD(ctx);
+  } else if (gameState === 'GAME_OVER') {
+    drawBackground(ctx);
+    for (const b of cannonballs) b.draw(ctx);
+    for (const e of enemies) e.draw(ctx);
+    player.draw(ctx);
+    for (const ex of explosions) ex.draw(ctx);
+    drawHUD(ctx);
+    drawGameOverScreen(ctx);
+  }
+
+  requestAnimationFrame(gameLoop);
+}
+
+// Init
+async function init() {
+  gameState = 'LOADING';
+  requestAnimationFrame(gameLoop);
+  setupInput();
+  await loadAllImages();
+  gameState = 'TITLE';
+}
+
+init();
+</script>
+</body>
+</html>
