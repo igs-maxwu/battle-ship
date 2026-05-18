@@ -51,6 +51,10 @@ let cannonballs = [];
 let explosions = [];
 let keys = {};
 let lastTime = 0;
+const flashCanvas = document.createElement('canvas');
+flashCanvas.width = 256;
+flashCanvas.height = 256;
+const flashCtx = flashCanvas.getContext('2d');
 
 // Assets
 const images = {};
@@ -102,6 +106,14 @@ class Player {
     this.angle = -Math.PI / 2;
     this.fireCooldown = 0;
     this.flashTimer = 0;
+    this.drawSize = PLAYER_SIZE;
+    this.collisionR = PLAYER_COLLISION_R;
+  }
+
+  updateScale() {
+    const scale = Math.min(Math.pow(this.maxHP / this.initialHP, 0.25), 3.0);
+    this.drawSize = Math.round(PLAYER_SIZE * scale);
+    this.collisionR = Math.round(PLAYER_COLLISION_R * scale);
   }
 
   update(dt) {
@@ -149,22 +161,15 @@ class Player {
     ctx.translate(this.x, this.y);
     ctx.rotate(this.angle + Math.PI / 2);
     const img = images.ship_player;
-    if (img) {
-      ctx.drawImage(img, -PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
-      if (this.flashTimer > 0) {
-        ctx.globalCompositeOperation = 'source-atop';
-        ctx.fillStyle = 'rgba(255, 60, 60, 0.55)';
-        ctx.fillRect(-PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
-        ctx.globalCompositeOperation = 'source-over';
-      }
-    } else {
+    const tint = this.flashTimer > 0 ? 'rgba(255, 60, 60, 0.55)' : null;
+    if (!drawSprite(ctx, img, this.drawSize, tint)) {
       ctx.fillStyle = this.flashTimer > 0 ? '#ff4444' : '#44aaff';
-      ctx.fillRect(-PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
+      ctx.fillRect(-this.drawSize / 2, -this.drawSize / 2, this.drawSize, this.drawSize);
     }
     ctx.restore();
 
     drawHPText(ctx, this.x, this.y, this.hp);
-    drawHPBar(ctx, this.x, this.y + PLAYER_SIZE / 2 + 8, 50, 6, this.hp, this.maxHP);
+    drawHPBar(ctx, this.x, this.y + this.drawSize / 2 + 8, 50, 6, this.hp, this.maxHP);
   }
 
   isDead() { return this.hp <= 0; }
@@ -178,7 +183,7 @@ class Enemy {
     this.initialHP = Math.round(playerMaxHP * (0.7 + Math.random() * 0.6));
     this.hp = this.initialHP;
     this.atk = this.initialHP / 10;
-    this.speed = PLAYER_SPEED * (0.7 + Math.random() * 0.2);
+    this.speed = PLAYER_SPEED * 0.8;
     this.angle = 0;
     this.fireCooldown = ENEMY_FIRE_COOLDOWN * Math.random();
     this.flashTimer = 0;
@@ -214,15 +219,8 @@ class Enemy {
     ctx.translate(this.x, this.y);
     ctx.rotate(this.angle + Math.PI / 2);
     const img = images[this.spriteKey];
-    if (img) {
-      ctx.drawImage(img, -PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
-      if (this.flashTimer > 0) {
-        ctx.globalCompositeOperation = 'source-atop';
-        ctx.fillStyle = 'rgba(255, 60, 60, 0.55)';
-        ctx.fillRect(-PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
-        ctx.globalCompositeOperation = 'source-over';
-      }
-    } else {
+    const tint = this.flashTimer > 0 ? 'rgba(255, 60, 60, 0.55)' : null;
+    if (!drawSprite(ctx, img, PLAYER_SIZE, tint)) {
       ctx.fillStyle = this.flashTimer > 0 ? '#ff4444' : '#cc3333';
       ctx.fillRect(-PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
     }
@@ -365,6 +363,7 @@ function checkCollisions() {
             player.maxHP += e.initialHP;
             player.hp = player.maxHP;
             player.atk = player.maxHP / 10;
+            player.updateScale();
             sunkCount++;
           } else {
             e.damaged = true;
@@ -373,7 +372,7 @@ function checkCollisions() {
         }
       }
     } else if (b.owner === 'enemy') {
-      if (circlesOverlap(b.x, b.y, CANNONBALL_COLLISION_R, player.x, player.y, PLAYER_COLLISION_R)) {
+      if (circlesOverlap(b.x, b.y, CANNONBALL_COLLISION_R, player.x, player.y, player.collisionR)) {
         player.hp -= b.atk;
         player.flashTimer = HIT_FLASH_MS;
         b.dead = true;
@@ -422,6 +421,23 @@ function drawBackground(ctx) {
   grad.addColorStop(1, '#1a6b8a');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+}
+
+function drawSprite(ctx, img, size, flashColor) {
+  if (!img) return false;
+  if (!flashColor) {
+    ctx.drawImage(img, -size / 2, -size / 2, size, size);
+    return true;
+  }
+  const offset = (256 - size) / 2;
+  flashCtx.clearRect(0, 0, 256, 256);
+  flashCtx.drawImage(img, offset, offset, size, size);
+  flashCtx.globalCompositeOperation = 'source-atop';
+  flashCtx.fillStyle = flashColor;
+  flashCtx.fillRect(0, 0, 256, 256);
+  flashCtx.globalCompositeOperation = 'source-over';
+  ctx.drawImage(flashCanvas, -size / 2, -size / 2, size, size);
+  return true;
 }
 
 function drawHPText(ctx, x, y, hp) {
